@@ -10,7 +10,8 @@ langgraph>=0.2.0
 langchain>=0.3.0
 langchain-groq>=0.2.0
 langchain-core>=0.3.0
-langfuse>=2.0.0
+arize-phoenix>=4.0.0
+openinference-instrumentation-langchain>=0.1.0
 
 # UI
 streamlit>=1.38.0

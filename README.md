@@ -18,7 +18,7 @@ A production-quality multi-agent AI system for jet engine predictive maintenance
                          Streamlit UI
 ```
 
-**Tech stack:** LangGraph · Groq (llama-3.3-70b-versatile) · Langfuse · XGBoost · Streamlit · NASA C-MAPSS FD001
+**Tech stack:** LangGraph · Groq (llama-3.3-70b-versatile) · Phoenix (Arize) · XGBoost · Streamlit · NASA C-MAPSS FD001
 
 ## Quick Start
 
@@ -28,7 +28,7 @@ pip install -r requirements.txt
 
 # 2. Configure API keys
 cp .env.example .env
-# Edit .env: add GROQ_API_KEY (and optionally Langfuse keys for tracing)
+# Edit .env: add your GROQ_API_KEY
 
 # 3. One-shot setup (downloads data, builds pipeline, trains model)
 python setup.py
@@ -84,18 +84,17 @@ XGBoost with rolling window features:
 
 ## Observability
 
-Two open-source options — both disabled by default:
+Uses **Arize Phoenix** — fully local, zero signup, runs in your browser at `localhost:6006`.
 
-**Langfuse** (cloud or self-hosted):
-```
-LANGFUSE_PUBLIC_KEY=pk-lf-...
-LANGFUSE_SECRET_KEY=sk-lf-...
-LANGFUSE_TRACING=true
-```
+Traces every LangGraph node, LLM call, tool invocation, latency, and token usage.
 
-**Phoenix** (fully local, zero signup):
 ```bash
-pip install arize-phoenix openinference-instrumentation-langchain
-PHOENIX_TRACING=true  # in .env
-python -m phoenix.server.main  # start the UI at localhost:6006
+# Enable in .env
+PHOENIX_TRACING=true
+
+# Start the Phoenix server (separate terminal)
+python -m phoenix.server.main
+
+# Then run the app — traces stream automatically
+streamlit run ui/app.py
 ```

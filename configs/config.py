@@ -38,13 +38,7 @@ RUL_CLIP = 125
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
-# Langfuse (open-source, self-hostable — https://langfuse.com)
-LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY", "")
-LANGFUSE_SECRET_KEY = os.getenv("LANGFUSE_SECRET_KEY", "")
-LANGFUSE_HOST = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-LANGFUSE_TRACING = os.getenv("LANGFUSE_TRACING", "false").lower() == "true"
-
-# Phoenix/Arize (open-source, runs locally)
+# Phoenix/Arize — open-source local tracing (https://phoenix.arize.com)
 PHOENIX_TRACING = os.getenv("PHOENIX_TRACING", "false").lower() == "true"
 PHOENIX_HOST = os.getenv("PHOENIX_HOST", "http://localhost:6006")
 

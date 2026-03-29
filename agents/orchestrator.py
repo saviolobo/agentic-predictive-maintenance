@@ -8,10 +8,7 @@ import operator
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage
 
-from configs.config import (
-    LANGFUSE_TRACING, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST,
-    PHOENIX_TRACING, PHOENIX_HOST,
-)
+from configs.config import PHOENIX_TRACING, PHOENIX_HOST
 from agents.sensor_monitor import run_sensor_analysis
 from agents.rul_predictor import run_rul_prediction
 from agents.maintenance_planner import run_maintenance_planning
@@ -20,16 +17,7 @@ from agents.maintenance_planner import run_maintenance_planning
 # ── Tracing setup (pick one backend) ─────────────────────────────────────────
 
 def _setup_tracing():
-    if LANGFUSE_TRACING and LANGFUSE_PUBLIC_KEY:
-        # Langfuse integrates via LangChain callback — registered per-chain
-        # Set env vars so LangChain auto-picks it up via langfuse-langchain
-        os.environ["LANGFUSE_PUBLIC_KEY"] = LANGFUSE_PUBLIC_KEY
-        os.environ["LANGFUSE_SECRET_KEY"] = LANGFUSE_SECRET_KEY
-        os.environ["LANGFUSE_HOST"] = LANGFUSE_HOST
-        # Enable via LangChain callback handler (imported lazily)
-        print("[tracing] Langfuse enabled")
-
-    elif PHOENIX_TRACING:
+    if PHOENIX_TRACING:
         try:
             import phoenix as px
             from openinference.instrumentation.langchain import LangChainInstrumentor
