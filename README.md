@@ -30,10 +30,13 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env: add your GROQ_API_KEY
 
-# 3. One-shot setup (downloads data, builds pipeline, trains model)
-python setup.py
+# 3. Download the dataset (see Dataset section) and place .txt files in data/raw/
 
-# 4. Launch the UI
+# 4. Build the data pipeline and train the model
+python tools/data_pipeline.py
+python tools/train_model.py
+
+# 5. Launch the UI
 streamlit run ui/app.py
 ```
 
@@ -47,11 +50,21 @@ streamlit run ui/app.py
 
 ## Dataset
 
-[NASA C-MAPSS FD001](https://data.nasa.gov/Aerospace/CMAPSS-Jet-Engine-Simulated-Data/ff5v-kuh6):
-- 100 turbofan engines
-- Single operating condition
-- HPC (High Pressure Compressor) degradation mode
-- 21 sensor readings per cycle
+**Not included in this repo** — download and place in `data/raw/` before running:
+
+- **Download:** https://data.nasa.gov/docs/legacy/CMAPSSData.zip
+
+```
+data/raw/
+├── train_FD001.txt
+├── test_FD001.txt
+└── RUL_FD001.txt
+```
+
+**Citation:**
+> A. Saxena, K. Goebel, D. Simon, and N. Eklund, "Damage Propagation Modeling for Aircraft Engine Run-to-Failure Simulation," in *Proceedings of the 1st International Conference on Prognostics and Health Management (PHM08)*, Denver, CO, Oct 2008.
+
+FD001 subset used: 100 turbofan engines, single operating condition, HPC degradation mode, 21 sensor readings per cycle.
 
 ## Model Performance (FD001)
 
