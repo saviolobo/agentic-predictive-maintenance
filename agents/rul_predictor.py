@@ -114,14 +114,8 @@ Be technically precise. Explain predictions in terms of the driving sensors.
 Acknowledge uncertainty — ML predictions carry inherent error (typical MAE ~15 cycles)."""
 
 
-def create_rul_predictor_agent() -> tuple:
-    llm = ChatGroq(
-        model=GROQ_MODEL,
-        api_key=GROQ_API_KEY,
-        temperature=0.1,
-    )
-    tools = [predict_rul, get_feature_importance]
-    return llm.bind_tools(tools), tools, SYSTEM_PROMPT
+def _plain_llm() -> ChatGroq:
+    return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.1)
 
 
 def run_rul_prediction(
@@ -131,16 +125,12 @@ def run_rul_prediction(
     feature_names: list[str],
     sensor_analysis: dict | None = None,
 ) -> dict:
-    """
-    Run RUL prediction agent. Used by LangGraph orchestrator.
-    """
-    llm, tools, system_prompt = create_rul_predictor_agent()
-
-    # Direct model inference for structured output
+    """ML inference in Python, LLM for reasoning only — no tool binding."""
     import joblib
     model_path = MODELS_DIR / "xgb_rul_FD001.joblib"
     predicted_rul = None
     urgency = "UNKNOWN"
+    top_features_str = ""
 
     if model_path.exists():
         model = joblib.load(model_path)
@@ -151,40 +141,27 @@ def run_rul_prediction(
             "WARNING" if predicted_rul <= WARNING_RUL_THRESHOLD else
             "NORMAL"
         )
-
-    sensor_context = ""
-    if sensor_analysis and sensor_analysis.get("llm_response"):
-        sensor_context = f"\nSensor Monitor findings:\n{sensor_analysis['llm_response']}\n"
-
-    # Top features for explanation
-    top_features_str = ""
-    if model_path.exists():
-        model = joblib.load(model_path)
         importance = model.feature_importances_
         pairs = sorted(zip(feature_names, importance), key=lambda x: x[1], reverse=True)[:5]
         top_vals = [(n, feature_vector[feature_names.index(n)], imp) for n, imp in pairs]
-        top_features_str = "\nTop driving features:\n" + "\n".join(
+        top_features_str = "Top driving features:\n" + "\n".join(
             f"  {n}: value={v:.4f}, importance={i:.4f}" for n, v, i in top_vals
         )
 
-    user_msg = f"""Analyze engine unit {unit_id} at cycle {cycle}.
+    sensor_context = ""
+    if sensor_analysis and sensor_analysis.get("llm_response"):
+        sensor_context = f"\nSensor Monitor summary:\n{sensor_analysis['llm_response']}\n"
 
-Predicted RUL from ML model: {predicted_rul:.1f if predicted_rul else 'N/A'} cycles
-Urgency status: {urgency}
+    user_msg = f"""Engine unit {unit_id} at cycle {cycle}.
+
+Predicted RUL: {f'{predicted_rul:.1f}' if predicted_rul is not None else 'N/A'} cycles | Status: {urgency}
 {top_features_str}
 {sensor_context}
-Provide:
-1. Interpretation of the RUL prediction
-2. Key factors driving this prediction
-3. Confidence assessment
-4. What this means for the engine's health"""
+Interpret the prediction: key driving factors, confidence level, and what this
+means for engine health. 2–3 short paragraphs."""
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_msg),
-    ]
-
-    response = llm.invoke(messages)
+    messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)]
+    response = _plain_llm().invoke(messages)
 
     return {
         "agent": "rul_predictor",
@@ -193,5 +170,4 @@ Provide:
         "predicted_rul": predicted_rul,
         "urgency": urgency,
         "llm_response": response.content,
-        "feature_vector": feature_vector,
     }

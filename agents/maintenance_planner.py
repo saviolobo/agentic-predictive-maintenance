@@ -175,14 +175,8 @@ Output clear, concise maintenance orders that a technician or fleet manager can 
 Include: what to inspect, why, when, and expected cost/benefit."""
 
 
-def create_maintenance_planner_agent() -> tuple:
-    llm = ChatGroq(
-        model=GROQ_MODEL,
-        api_key=GROQ_API_KEY,
-        temperature=0.2,  # slightly more creative for recommendations
-    )
-    tools = [calculate_maintenance_priority, generate_maintenance_schedule, estimate_maintenance_cost]
-    return llm.bind_tools(tools), tools, SYSTEM_PROMPT
+def _plain_llm() -> ChatGroq:
+    return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.2)
 
 
 def run_maintenance_planning(
@@ -193,63 +187,39 @@ def run_maintenance_planning(
     sensor_analysis: dict | None = None,
     rul_analysis: dict | None = None,
 ) -> dict:
-    """
-    Run maintenance planning agent. Used by LangGraph orchestrator.
-    """
-    llm, tools, system_prompt = create_maintenance_planner_agent()
+    """Priority scoring in Python, LLM for recommendations only — no tool binding."""
+    anomaly_count = sensor_analysis.get("anomaly_count", 0) if sensor_analysis else 0
+    degradation_score = sensor_analysis.get("degradation_score", 0.0) if sensor_analysis else 0.0
 
-    # Calculate priority using tool logic directly
-    degradation_score = 0.0
-    anomaly_count = 0
+    # Compute priority score in Python
+    rul_score = max(0, 100 - (predicted_rul / 1.25))
+    priority_score = min(100, rul_score * 0.6 + min(30, degradation_score * 1000) + min(20, anomaly_count * 5))
+    tier = (
+        "P1 - IMMEDIATE" if priority_score >= 80 else
+        "P2 - URGENT"    if priority_score >= 60 else
+        "P3 - PLANNED"   if priority_score >= 40 else
+        "P4 - MONITOR"
+    )
 
-    if sensor_analysis:
-        anomaly_count = sensor_analysis.get("anomaly_count", 0)
-        if "degradation_score" in str(sensor_analysis.get("llm_response", "")):
-            degradation_score = 0.05  # placeholder when not explicitly returned
+    # Cost estimate
+    base = 50_000
+    mult = {"CRITICAL": 4.0, "WARNING": 2.0, "NORMAL": 1.0}.get(urgency, 1.5)
+    est_cost = round(base * mult + anomaly_count * 8_000)
+    savings = round((2_500_000 - est_cost) / 1_000)
 
-    rul_context = ""
-    if rul_analysis and rul_analysis.get("llm_response"):
-        rul_context = f"\nRUL Agent findings:\n{rul_analysis['llm_response']}\n"
-
-    sensor_context = ""
-    if sensor_analysis and sensor_analysis.get("llm_response"):
-        sensor_context = f"\nSensor Monitor findings:\n{sensor_analysis['llm_response']}\n"
+    sensor_ctx = f"\nSensor findings:\n{sensor_analysis['llm_response']}\n" if sensor_analysis and sensor_analysis.get("llm_response") else ""
+    rul_ctx = f"\nRUL analysis:\n{rul_analysis['llm_response']}\n" if rul_analysis and rul_analysis.get("llm_response") else ""
 
     user_msg = f"""Generate a maintenance plan for engine unit {unit_id}.
 
-Current status:
-- Cycle: {cycle}
-- Predicted RUL: {predicted_rul:.1f} cycles
-- Urgency: {urgency}
-- Anomalous sensors: {anomaly_count}
-{sensor_context}
-{rul_context}
-Please provide:
-1. Priority tier and recommended action window
-2. Specific maintenance actions to take
-3. Components to inspect based on sensor anomalies
-4. Cost-benefit justification
-5. Any operational restrictions (e.g., reduce thrust, limit flight hours)"""
+Status: Cycle {cycle} | RUL {predicted_rul:.1f} cycles | {urgency} | Priority {tier} (score {priority_score:.0f}/100)
+Estimated proactive maintenance cost: ${est_cost:,} | Saves ~${savings}K vs unplanned failure
+{sensor_ctx}{rul_ctx}
+Provide: action window, specific inspection steps, components to check, and any operational restrictions.
+Be direct and actionable — write for a maintenance technician."""
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_msg),
-    ]
-
-    response = llm.invoke(messages)
-
-    # Calculate priority score
-    rul_score = max(0, 100 - (predicted_rul / 1.25))
-    degradation_component = min(30, degradation_score * 1000)
-    anomaly_component = min(20, anomaly_count * 5)
-    priority_score = min(100, rul_score * 0.6 + degradation_component + anomaly_component)
-
-    tier = (
-        "P1 - IMMEDIATE" if priority_score >= 80 else
-        "P2 - URGENT" if priority_score >= 60 else
-        "P3 - PLANNED" if priority_score >= 40 else
-        "P4 - MONITOR"
-    )
+    messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)]
+    response = _plain_llm().invoke(messages)
 
     return {
         "agent": "maintenance_planner",
@@ -259,6 +229,7 @@ Please provide:
         "tier": tier,
         "urgency": urgency,
         "predicted_rul": predicted_rul,
+        "estimated_cost_usd": est_cost,
         "llm_response": response.content,
         "anomaly_count": anomaly_count,
     }

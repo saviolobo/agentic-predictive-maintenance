@@ -109,15 +109,45 @@ When sensor values are post-normalized (0–1 scale), values near 1.0 often indi
 high stress/degradation. Focus on patterns, not individual readings."""
 
 
-def create_sensor_monitor_agent() -> ChatGroq:
-    """Return configured Groq LLM bound with sensor monitoring tools."""
-    llm = ChatGroq(
-        model=GROQ_MODEL,
-        api_key=GROQ_API_KEY,
-        temperature=0.1,
-    )
-    tools = [detect_anomalies, analyze_degradation_trend]
-    return llm.bind_tools(tools), tools, SYSTEM_PROMPT
+def _plain_llm() -> ChatGroq:
+    """Plain LLM — no tool binding. Used for reasoning-only calls."""
+    return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.1)
+
+
+def _compute_anomalies(sensor_readings: dict) -> dict:
+    """Run anomaly detection in Python (no LLM needed)."""
+    flagged = []
+    details = {}
+    for k, v in sensor_readings.items():
+        if k.startswith("sensor_") and isinstance(v, (int, float)):
+            anomaly = v < -0.1 or v > 1.1
+            details[k] = {"value": round(v, 4), "anomaly": anomaly}
+            if anomaly:
+                flagged.append(k)
+    return {"flagged_sensors": flagged, "anomaly_count": len(flagged), "details": details}
+
+
+def _compute_trends(history: list[dict]) -> dict:
+    """Compute degradation trends in Python (no LLM needed)."""
+    if not history or len(history) < 2:
+        return {}
+    df = pd.DataFrame(history).sort_values("cycle")
+    trends = {}
+    for col in [c for c in df.columns if c.startswith("sensor_")]:
+        vals = df[col].dropna().values
+        if len(vals) >= 2:
+            slope = float(np.polyfit(range(len(vals)), vals, 1)[0])
+            trends[col] = {
+                "slope": round(slope, 6),
+                "direction": "increasing" if slope > 0.001 else "decreasing" if slope < -0.001 else "stable",
+                "latest": round(float(vals[-1]), 4),
+            }
+    degrading = [s for s, t in trends.items() if t["direction"] != "stable"]
+    return {
+        "degrading_sensors": degrading,
+        "degradation_score": round(sum(abs(t["slope"]) for t in trends.values()), 4),
+        "trends": trends,
+    }
 
 
 def run_sensor_analysis(
@@ -130,40 +160,44 @@ def run_sensor_analysis(
     Standalone sensor analysis — returns structured findings.
     Used by the LangGraph orchestrator as a node function.
     """
-    llm, tools, system_prompt = create_sensor_monitor_agent()
+    # Pre-compute in Python — pass results to LLM for reasoning only
+    anomaly_result = _compute_anomalies(sensor_readings)
+    trend_result = _compute_trends(history) if history else {}
 
     sensor_str = "\n".join(
         f"  {k}: {v:.4f}" for k, v in sensor_readings.items()
         if k.startswith("sensor_")
     )
-    history_note = (
-        f"Last {len(history)} cycles of history are available."
-        if history else "No history provided."
+    anomaly_str = (
+        f"Flagged sensors ({anomaly_result['anomaly_count']}): {anomaly_result['flagged_sensors']}"
+        if anomaly_result["anomaly_count"] > 0 else "No out-of-range sensors detected."
     )
+    trend_str = ""
+    if trend_result:
+        score = trend_result.get("degradation_score", 0)
+        degrading = trend_result.get("degrading_sensors", [])
+        trend_str = f"\nDegradation score: {score:.4f}. Trending sensors: {degrading or 'none'}."
 
     user_msg = f"""Analyze engine unit {unit_id} at cycle {current_cycle}.
 
-Current sensor readings (normalized 0–1):
+Sensor readings (normalized 0–1):
 {sensor_str}
 
-{history_note}
+Anomaly check: {anomaly_str}{trend_str}
 
-1. Detect any anomalies in the current readings.
-2. If history is available, analyze degradation trends.
-3. Summarize your findings and flag any concerns."""
+Provide a concise health assessment: what the sensors indicate about engine condition,
+any concerns, and confidence level. 2–3 short paragraphs max."""
 
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_msg),
-    ]
-
-    response = llm.invoke(messages)
+    messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)]
+    response = _plain_llm().invoke(messages)
 
     return {
         "agent": "sensor_monitor",
         "unit_id": unit_id,
         "cycle": current_cycle,
         "llm_response": response.content,
-        "tool_calls": response.tool_calls if hasattr(response, "tool_calls") else [],
+        "anomaly_count": anomaly_result["anomaly_count"],
+        "flagged_sensors": anomaly_result["flagged_sensors"],
+        "degradation_score": trend_result.get("degradation_score", 0.0),
         "sensor_readings": sensor_readings,
     }

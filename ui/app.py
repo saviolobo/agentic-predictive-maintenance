@@ -1,9 +1,8 @@
-"""Streamlit UI — Jet Engine Predictive Maintenance Dashboard."""
+"""Streamlit dashboard — Jet Engine Predictive Maintenance."""
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
 from pathlib import Path
 import sys
 
@@ -15,326 +14,374 @@ from configs.config import (
 )
 
 st.set_page_config(
-    page_title="Jet Engine Predictive Maintenance",
+    page_title="Engine Health Monitor",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Styles ───────────────────────────────────────────────────────────────────
-
 st.markdown("""
 <style>
-.metric-critical { background: #fee2e2; border-left: 4px solid #ef4444; padding: 8px 12px; border-radius: 4px; }
-.metric-warning  { background: #fef3c7; border-left: 4px solid #f59e0b; padding: 8px 12px; border-radius: 4px; }
-.metric-normal   { background: #d1fae5; border-left: 4px solid #10b981; padding: 8px 12px; border-radius: 4px; }
-.agent-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  /* Dark base */
+  .stApp { background-color: #0f1117; color: #e2e8f0; }
+  section[data-testid="stSidebar"] { background-color: #1a1d27; }
+  section[data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+
+  /* Cards */
+  .card {
+    background: #1e2130; border-radius: 10px;
+    padding: 20px 24px; margin-bottom: 16px;
+    border: 1px solid #2d3148;
+  }
+  .card-critical { border-left: 4px solid #ef4444; }
+  .card-warning  { border-left: 4px solid #f59e0b; }
+  .card-normal   { border-left: 4px solid #10b981; }
+
+  /* Status badges */
+  .badge { display:inline-block; padding:4px 12px; border-radius:20px;
+           font-weight:700; font-size:0.85rem; letter-spacing:0.05em; }
+  .badge-critical { background:#450a0a; color:#fca5a5; }
+  .badge-warning  { background:#451a03; color:#fcd34d; }
+  .badge-normal   { background:#052e16; color:#6ee7b7; }
+
+  /* Agent output boxes */
+  .agent-output {
+    background:#151823; border:1px solid #2d3148; border-radius:8px;
+    padding:16px; font-size:0.88rem; line-height:1.65;
+    color:#cbd5e1; white-space:pre-wrap; max-height:380px; overflow-y:auto;
+  }
+  .agent-header {
+    font-size:0.75rem; font-weight:700; letter-spacing:0.1em;
+    text-transform:uppercase; margin-bottom:8px;
+  }
+  .agent-header-blue   { color:#60a5fa; }
+  .agent-header-purple { color:#a78bfa; }
+  .agent-header-green  { color:#34d399; }
+
+  /* Metrics */
+  [data-testid="stMetricValue"] { color:#f1f5f9 !important; font-size:2rem !important; }
+  [data-testid="stMetricLabel"] { color:#94a3b8 !important; }
+  [data-testid="stMetricDelta"] { font-size:0.8rem !important; }
+
+  /* Dividers */
+  hr { border-color:#2d3148; }
+
+  /* Dataframe */
+  [data-testid="stDataFrame"] { border-radius:8px; overflow:hidden; }
+
+  /* Hide default streamlit elements */
+  #MainMenu, footer { visibility:hidden; }
 </style>
 """, unsafe_allow_html=True)
 
 
-# ── Data loading ─────────────────────────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def urgency(rul):
+    if rul <= CRITICAL_RUL_THRESHOLD: return "CRITICAL"
+    if rul <= WARNING_RUL_THRESHOLD:  return "WARNING"
+    return "NORMAL"
+
+def rul_color(rul):
+    if rul <= CRITICAL_RUL_THRESHOLD: return "#ef4444"
+    if rul <= WARNING_RUL_THRESHOLD:  return "#f59e0b"
+    return "#10b981"
+
+def badge_html(status):
+    cls = {"CRITICAL": "badge-critical", "WARNING": "badge-warning", "NORMAL": "badge-normal"}.get(status, "")
+    return f'<span class="badge {cls}">{status}</span>'
+
+
+# ── Data loaders ─────────────────────────────────────────────────────────────
 
 @st.cache_data
-def load_test_data():
-    path = DATA_PROCESSED_DIR / "test_FD001_last.parquet"
-    if not path.exists():
-        return None
-    return pd.read_parquet(path)
-
+def load_test_last():
+    p = DATA_PROCESSED_DIR / "test_FD001_last.parquet"
+    return pd.read_parquet(p) if p.exists() else None
 
 @st.cache_data
-def load_full_test():
-    path = DATA_PROCESSED_DIR / "test_FD001_full.parquet"
-    if not path.exists():
-        return None
-    return pd.read_parquet(path)
-
+def load_test_full():
+    p = DATA_PROCESSED_DIR / "test_FD001_full.parquet"
+    return pd.read_parquet(p) if p.exists() else None
 
 @st.cache_resource
 def load_model():
+    p = MODELS_DIR / "xgb_rul_FD001.joblib"
+    if not p.exists(): return None
     import joblib
-    path = MODELS_DIR / "xgb_rul_FD001.joblib"
-    if not path.exists():
-        return None
-    return joblib.load(path)
+    return joblib.load(p)
+
+from tools.data_pipeline import get_feature_columns_with_rolling
+
+@st.cache_data
+def get_feature_cols(data_cols):
+    fc = get_feature_columns_with_rolling()
+    return [c for c in fc if c in data_cols]
 
 
-def get_rul_color(rul):
-    if rul <= CRITICAL_RUL_THRESHOLD:
-        return "#ef4444"
-    elif rul <= WARNING_RUL_THRESHOLD:
-        return "#f59e0b"
-    return "#10b981"
+# ── Load data ─────────────────────────────────────────────────────────────────
+
+data = load_test_last()
+model = load_model()
+
+if data is None:
+    st.error("No processed data found. Run: `python -m tools.data_pipeline`")
+    st.stop()
+
+feature_cols = get_feature_cols(tuple(data.columns))
+
+# Compute fleet predictions
+if model:
+    fleet_preds = np.maximum(0, model.predict(data[feature_cols].values))
+else:
+    fleet_preds = data["RUL"].values
+
+fleet_df = pd.DataFrame({
+    "unit_id": data["unit_id"].values,
+    "predicted_rul": fleet_preds.round(1),
+    "true_rul": data["RUL"].values.round(1),
+    "cycle": data["cycle"].values,
+})
+fleet_df["status"] = fleet_df["predicted_rul"].apply(urgency)
 
 
-def get_urgency(rul):
-    if rul <= CRITICAL_RUL_THRESHOLD:
-        return "CRITICAL"
-    elif rul <= WARNING_RUL_THRESHOLD:
-        return "WARNING"
-    return "NORMAL"
-
-
-# ── Header ───────────────────────────────────────────────────────────────────
-
-st.title("✈️ Jet Engine Predictive Maintenance")
-st.caption("Multi-agent AI system powered by LangGraph · Groq · NASA C-MAPSS FD001")
-
-# ── Sidebar ──────────────────────────────────────────────────────────────────
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("Configuration")
-
-    data = load_test_data()
-    model = load_model()
-
-    if data is None:
-        st.error("Data not found. Run the setup pipeline first.")
-        st.code("python tools/download_data.py\npython tools/data_pipeline.py\npython tools/train_model.py")
-        st.stop()
-
-    if model is None:
-        st.warning("Model not trained. Run: `python tools/train_model.py`")
+    st.markdown("### ✈️ Engine Health Monitor")
+    st.caption("NASA C-MAPSS FD001 · XGBoost + LLM Agents")
+    st.divider()
 
     unit_ids = sorted(data["unit_id"].unique())
-    selected_unit = st.selectbox("Select Engine Unit", unit_ids, index=0)
+    selected_unit = st.selectbox("Select Engine", unit_ids,
+                                  format_func=lambda x: f"Engine #{x:03d}")
 
     st.divider()
-    st.subheader("System Status")
-    st.success("Data pipeline: Ready")
-    st.success(f"Model: {'Ready' if model else 'Not trained'}")
-
-    agents_ready = bool(Path(".env").exists())
-    if agents_ready:
-        st.success("LLM Agents: Configured")
+    st.markdown("**System Status**")
+    st.success("Data pipeline ready")
+    st.success("XGBoost model loaded" if model else "Model not trained")
+    api_ok = bool(Path(".env").exists())
+    if api_ok:
+        st.success("Groq API configured")
     else:
-        st.warning("LLM Agents: Add .env file")
+        st.warning("Add GROQ_API_KEY to .env")
 
     st.divider()
-    run_agents = st.button(
-        "Run Multi-Agent Analysis",
-        type="primary",
-        disabled=(model is None),
-        help="Runs Sensor Monitor → RUL Predictor → Maintenance Planner"
-    )
+    run_agents = st.button("▶ Run Agent Analysis", type="primary",
+                            disabled=(not model or not api_ok),
+                            use_container_width=True)
+
+    st.divider()
+    # Fleet summary in sidebar
+    n_critical = (fleet_df["status"] == "CRITICAL").sum()
+    n_warning  = (fleet_df["status"] == "WARNING").sum()
+    n_normal   = (fleet_df["status"] == "NORMAL").sum()
+    st.markdown("**Fleet Summary**")
+    st.markdown(f"🔴 Critical: **{n_critical}**")
+    st.markdown(f"🟡 Warning: **{n_warning}**")
+    st.markdown(f"🟢 Normal: **{n_normal}**")
 
 
-# ── Main dashboard ───────────────────────────────────────────────────────────
+# ── Selected engine row ───────────────────────────────────────────────────────
 
-engine_row = data[data["unit_id"] == selected_unit].iloc[0]
-from tools.data_pipeline import get_feature_columns_with_rolling
-feature_cols = get_feature_columns_with_rolling()
-feature_cols = [c for c in feature_cols if c in data.columns]
+row = data[data["unit_id"] == selected_unit].iloc[0]
+pred_rul = float(fleet_df[fleet_df["unit_id"] == selected_unit]["predicted_rul"].iloc[0])
+true_rul = float(row["RUL"])
+cycle    = int(row["cycle"])
+status   = urgency(pred_rul)
+color    = rul_color(pred_rul)
 
-# Compute predicted RUL
-predicted_rul = None
-if model:
-    X = engine_row[feature_cols].values.reshape(1, -1)
-    predicted_rul = float(max(0, model.predict(X)[0]))
 
-true_rul = float(engine_row["RUL"])
-cycle = int(engine_row["cycle"])
-urgency = get_urgency(predicted_rul or true_rul)
-urgency_color = get_rul_color(predicted_rul or true_rul)
+# ── Header row ────────────────────────────────────────────────────────────────
 
-# ── KPI row ──────────────────────────────────────────────────────────────────
-col1, col2, col3, col4 = st.columns(4)
+st.markdown(f"## Engine #{selected_unit:03d} &nbsp; {badge_html(status)}",
+            unsafe_allow_html=True)
 
-with col1:
-    st.metric("Engine Unit", f"#{selected_unit}")
-with col2:
-    st.metric("Current Cycle", cycle)
-with col3:
-    if predicted_rul is not None:
-        delta = f"{predicted_rul - true_rul:+.1f} vs true"
-        st.metric("Predicted RUL", f"{predicted_rul:.0f} cycles", delta=delta)
-    else:
-        st.metric("True RUL", f"{true_rul:.0f} cycles")
-with col4:
-    badge_class = f"metric-{urgency.lower()}"
-    st.markdown(
-        f'<div class="{badge_class}"><b>Status</b><br/><span style="font-size:1.4em">{urgency}</span></div>',
-        unsafe_allow_html=True,
-    )
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Current Cycle", cycle)
+m2.metric("Predicted RUL", f"{pred_rul:.0f} cycles")
+m3.metric("True RUL", f"{true_rul:.0f} cycles")
+m4.metric("Error", f"{abs(pred_rul - true_rul):.1f} cycles")
+m5.metric("Fleet Size", f"{len(fleet_df)} engines")
 
 st.divider()
 
-# ── Charts row ───────────────────────────────────────────────────────────────
 
-col_left, col_right = st.columns([2, 1])
+# ── Charts ────────────────────────────────────────────────────────────────────
+
+col_left, col_right = st.columns([3, 2])
 
 with col_left:
-    st.subheader("Sensor Readings (Current Cycle)")
-
-    sensor_cols_plot = [c for c in feature_cols if c.startswith("sensor_") and not c.endswith(("_roll_mean", "_roll_std"))]
-    sensor_vals = [float(engine_row[c]) for c in sensor_cols_plot]
+    st.markdown("#### Sensor Readings")
+    raw_sensors = [c for c in feature_cols if c.startswith("sensor_")
+                   and not c.endswith(("_roll_mean", "_roll_std"))]
+    vals = [float(row[c]) for c in raw_sensors]
 
     fig = go.Figure(go.Bar(
-        x=sensor_cols_plot,
-        y=sensor_vals,
-        marker_color=[
-            "#ef4444" if v > 0.85 else "#f59e0b" if v > 0.7 else "#10b981"
-            for v in sensor_vals
-        ],
+        x=raw_sensors, y=vals,
+        marker_color=[rul_color(1 - v) if v > 0.7 else "#3b82f6" for v in vals],
+        hovertemplate="%{x}: %{y:.4f}<extra></extra>",
     ))
+    fig.add_hline(y=0.85, line_dash="dot", line_color="#ef4444",
+                  annotation_text="High stress", annotation_font_color="#ef4444")
     fig.update_layout(
-        xaxis_title="Sensor", yaxis_title="Normalized Value",
-        height=320, margin=dict(t=10, b=40),
-        plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(range=[0, 1.1], gridcolor="#f0f0f0"),
+        height=300, margin=dict(t=10, b=40, l=10, r=10),
+        plot_bgcolor="#151823", paper_bgcolor="#1e2130",
+        font_color="#94a3b8",
+        xaxis=dict(gridcolor="#2d3148", tickangle=-45),
+        yaxis=dict(range=[0, 1.15], gridcolor="#2d3148", title="Normalized value"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-
 with col_right:
-    st.subheader("Fleet Overview")
-
-    if model:
-        all_preds = model.predict(data[feature_cols].values)
-        all_preds = np.maximum(0, all_preds)
-    else:
-        all_preds = data["RUL"].values
-
-    fleet_df = pd.DataFrame({
-        "unit_id": data["unit_id"].values,
-        "predicted_rul": all_preds,
-        "true_rul": data["RUL"].values,
-    })
-    fleet_df["urgency"] = fleet_df["predicted_rul"].apply(get_urgency)
-
-    counts = fleet_df["urgency"].value_counts()
-    colors = {"CRITICAL": "#ef4444", "WARNING": "#f59e0b", "NORMAL": "#10b981"}
+    st.markdown("#### Fleet Health Distribution")
+    counts = fleet_df["status"].value_counts()
+    colors_map = {"CRITICAL": "#ef4444", "WARNING": "#f59e0b", "NORMAL": "#10b981"}
 
     fig2 = go.Figure(go.Pie(
-        labels=list(counts.index),
-        values=list(counts.values),
-        marker_colors=[colors.get(u, "#94a3b8") for u in counts.index],
-        hole=0.45,
+        labels=list(counts.index), values=list(counts.values),
+        marker_colors=[colors_map.get(u, "#64748b") for u in counts.index],
+        hole=0.55,
+        textfont_size=13,
+        hovertemplate="%{label}: %{value} engines<extra></extra>",
     ))
-    fig2.update_layout(height=280, margin=dict(t=10, b=10), showlegend=True)
+    fig2.update_layout(
+        height=300, margin=dict(t=10, b=10, l=10, r=10),
+        plot_bgcolor="#151823", paper_bgcolor="#1e2130",
+        font_color="#94a3b8",
+        showlegend=True,
+        legend=dict(font_color="#e2e8f0"),
+        annotations=[dict(text=f"{len(fleet_df)}<br>engines",
+                          font_size=16, font_color="#e2e8f0", showarrow=False)],
+    )
     st.plotly_chart(fig2, use_container_width=True)
 
-    st.caption(f"Fleet size: {len(fleet_df)} engines")
 
+# ── Sensor history ────────────────────────────────────────────────────────────
 
-# ── Engine history plot ───────────────────────────────────────────────────────
-
-full_test = load_full_test()
+full_test = load_test_full()
 if full_test is not None:
-    st.subheader(f"Engine #{selected_unit} — Sensor Trend History")
+    st.markdown(f"#### Engine #{selected_unit:03d} — Sensor History")
+    hist = full_test[full_test["unit_id"] == selected_unit].copy()
 
-    eng_hist = full_test[full_test["unit_id"] == selected_unit].copy()
-
-    # Pick 3 most informative sensors (high variance in FD001)
-    watch_sensors = ["sensor_2", "sensor_3", "sensor_4", "sensor_7", "sensor_11",
-                     "sensor_12", "sensor_15", "sensor_17", "sensor_20", "sensor_21"]
-    watch_sensors = [s for s in watch_sensors if s in eng_hist.columns][:4]
+    watch = [s for s in ["sensor_2", "sensor_3", "sensor_4", "sensor_7",
+                          "sensor_11", "sensor_12", "sensor_15", "sensor_17",
+                          "sensor_20", "sensor_21"] if s in hist.columns][:5]
 
     fig3 = go.Figure()
-    for s in watch_sensors:
+    palette = ["#60a5fa", "#34d399", "#f59e0b", "#a78bfa", "#f87171"]
+    for i, s in enumerate(watch):
         fig3.add_trace(go.Scatter(
-            x=eng_hist["cycle"], y=eng_hist[s],
-            mode="lines", name=s, line=dict(width=1.5),
+            x=hist["cycle"], y=hist[s], mode="lines", name=s,
+            line=dict(width=1.8, color=palette[i % len(palette)]),
+            hovertemplate=f"{s}: %{{y:.4f}} @ cycle %{{x}}<extra></extra>",
         ))
     fig3.update_layout(
-        xaxis_title="Cycle", yaxis_title="Normalized Value",
-        height=300, margin=dict(t=10, b=40),
-        plot_bgcolor="white", paper_bgcolor="white",
-        yaxis=dict(gridcolor="#f0f0f0"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=280, margin=dict(t=10, b=40, l=10, r=10),
+        plot_bgcolor="#151823", paper_bgcolor="#1e2130",
+        font_color="#94a3b8",
+        xaxis=dict(title="Cycle", gridcolor="#2d3148"),
+        yaxis=dict(title="Normalized value", gridcolor="#2d3148"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02,
+                    font_color="#e2e8f0", bgcolor="rgba(0,0,0,0)"),
     )
     st.plotly_chart(fig3, use_container_width=True)
 
+st.divider()
 
 # ── Fleet table ───────────────────────────────────────────────────────────────
 
-st.subheader("Fleet Status Table")
+st.markdown("#### Fleet Status")
 
-fleet_display = fleet_df.copy()
-fleet_display["priority"] = fleet_display["predicted_rul"].apply(
-    lambda r: "P1" if r <= CRITICAL_RUL_THRESHOLD else
-              "P2" if r <= WARNING_RUL_THRESHOLD else "P4"
-)
-fleet_display = fleet_display.sort_values("predicted_rul")
-fleet_display.columns = ["Unit ID", "Predicted RUL", "True RUL", "Status", "Priority"]
-fleet_display["Predicted RUL"] = fleet_display["Predicted RUL"].round(1)
-fleet_display["True RUL"] = fleet_display["True RUL"].round(1)
+display = fleet_df[["unit_id", "predicted_rul", "true_rul", "cycle", "status"]].copy()
+display.columns = ["Unit", "Predicted RUL", "True RUL", "Last Cycle", "Status"]
+display = display.sort_values("Predicted RUL")
 
-def highlight_status(row):
-    if row["Status"] == "CRITICAL":
-        return ["background-color: #fee2e2"] * len(row)
-    elif row["Status"] == "WARNING":
-        return ["background-color: #fef3c7"] * len(row)
-    return [""] * len(row)
+def _row_style(row):
+    if row["Status"] == "CRITICAL": return ["background-color:#2d1515; color:#fca5a5"] * len(row)
+    if row["Status"] == "WARNING":  return ["background-color:#2d2008; color:#fcd34d"] * len(row)
+    return ["background-color:#0d2318; color:#6ee7b7"] * len(row)
 
 st.dataframe(
-    fleet_display.style.apply(highlight_status, axis=1),
+    display.style.apply(_row_style, axis=1),
     use_container_width=True,
-    height=280,
+    height=260,
 )
 
+st.divider()
 
-# ── Multi-agent analysis panel ────────────────────────────────────────────────
+
+# ── Multi-agent analysis ──────────────────────────────────────────────────────
 
 if run_agents:
-    st.divider()
-    st.subheader("Multi-Agent Analysis")
+    st.markdown("### Agent Analysis Pipeline")
+    st.caption("LangGraph orchestrating 3 specialized agents via Groq llama-3.3-70b-versatile")
 
-    with st.spinner("Running LangGraph pipeline: Sensor Monitor → RUL Predictor → Maintenance Planner..."):
-        try:
-            from agents.orchestrator import analyze_engine
+    prog = st.progress(0, text="Starting pipeline...")
 
-            sensor_readings = {
-                col: float(engine_row[col])
-                for col in feature_cols
-                if col.startswith("sensor_") and not col.endswith(("_roll_mean", "_roll_std"))
-            }
-            fv = [float(engine_row[c]) for c in feature_cols]
+    try:
+        from agents.orchestrator import analyze_engine
 
-            result = analyze_engine(
-                unit_id=selected_unit,
-                cycle=cycle,
-                sensor_readings=sensor_readings,
-                feature_vector=fv,
-                feature_names=feature_cols,
-            )
+        sensor_readings = {
+            c: float(row[c]) for c in feature_cols
+            if c.startswith("sensor_") and not c.endswith(("_roll_mean", "_roll_std"))
+        }
+        fv = [float(row[c]) for c in feature_cols]
 
-            # Display results
-            agent_col1, agent_col2, agent_col3 = st.columns(3)
+        prog.progress(10, text="Running Sensor Monitor Agent...")
+        result = analyze_engine(
+            unit_id=selected_unit, cycle=cycle,
+            sensor_readings=sensor_readings,
+            feature_vector=fv, feature_names=feature_cols,
+        )
+        prog.progress(100, text="Complete!")
 
-            with agent_col1:
-                st.markdown("#### Sensor Monitor Agent")
-                sa = result.get("sensor_analysis") or {}
-                st.markdown(f'<div class="agent-box">{sa.get("llm_response", "No response")}</div>',
-                           unsafe_allow_html=True)
+        if result.get("error"):
+            st.error(f"Pipeline error: {result['error']}")
+        else:
+            a1, a2, a3 = st.columns(3)
 
-            with agent_col2:
-                st.markdown("#### RUL Predictor Agent")
-                ra = result.get("rul_analysis") or {}
-                rul_pred = ra.get("predicted_rul")
-                if rul_pred:
-                    st.metric("Model Prediction", f"{rul_pred:.1f} cycles")
-                st.markdown(f'<div class="agent-box">{ra.get("llm_response", "No response")}</div>',
-                           unsafe_allow_html=True)
+            sa = result.get("sensor_analysis") or {}
+            ra = result.get("rul_analysis") or {}
+            mp = result.get("maintenance_plan") or {}
 
-            with agent_col3:
-                st.markdown("#### Maintenance Planner Agent")
-                mp = result.get("maintenance_plan") or {}
+            with a1:
+                st.markdown('<div class="agent-header agent-header-blue">🔍 Sensor Monitor</div>',
+                            unsafe_allow_html=True)
+                flagged = sa.get("flagged_sensors", [])
+                st.markdown(f"Anomalies: **{sa.get('anomaly_count', 0)}** "
+                            f"{'— ' + ', '.join(flagged) if flagged else '(none)'}")
+                st.markdown(f'<div class="agent-output">{sa.get("llm_response", "")}</div>',
+                            unsafe_allow_html=True)
+
+            with a2:
+                st.markdown('<div class="agent-header agent-header-purple">📊 RUL Predictor</div>',
+                            unsafe_allow_html=True)
+                rul_val = ra.get("predicted_rul")
+                if rul_val is not None:
+                    st.metric("Predicted RUL", f"{rul_val:.1f} cycles",
+                              delta=ra.get("urgency", ""))
+                st.markdown(f'<div class="agent-output">{ra.get("llm_response", "")}</div>',
+                            unsafe_allow_html=True)
+
+            with a3:
+                st.markdown('<div class="agent-header agent-header-green">🔧 Maintenance Planner</div>',
+                            unsafe_allow_html=True)
                 tier = mp.get("tier", "")
                 if tier:
-                    st.info(f"**{tier}** · Score: {mp.get('priority_score', 0):.0f}/100")
-                st.markdown(f'<div class="agent-box">{mp.get("llm_response", "No response")}</div>',
-                           unsafe_allow_html=True)
+                    st.info(f"**{tier}** · Score {mp.get('priority_score', 0):.0f}/100"
+                            f" · Est. ${mp.get('estimated_cost_usd', 0):,}")
+                st.markdown(f'<div class="agent-output">{mp.get("llm_response", "")}</div>',
+                            unsafe_allow_html=True)
 
-            if result.get("error"):
-                st.error(f"Pipeline error: {result['error']}")
-
-        except Exception as e:
-            st.error(f"Failed to run agents: {e}")
-            st.info("Make sure GROQ_API_KEY is set in your .env file and requirements are installed.")
+    except Exception as e:
+        prog.empty()
+        st.error(f"Pipeline failed: {e}")
+        st.info("Check your GROQ_API_KEY in .env and that requirements are installed.")
 
 
 # ── Footer ────────────────────────────────────────────────────────────────────
+
 st.divider()
-st.caption("NASA C-MAPSS FD001 · XGBoost RUL Model · LangGraph Multi-Agent · Groq llama-3.3-70b-versatile")
+st.caption("NASA C-MAPSS FD001 · Saxena et al. PHM08 · XGBoost RUL Model · "
+           "LangGraph Multi-Agent · Groq llama-3.3-70b-versatile · Arize Phoenix")
