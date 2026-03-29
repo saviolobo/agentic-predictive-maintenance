@@ -5,7 +5,7 @@ from langchain_core.tools import tool
 from typing import Any
 
 from configs.config import (
-    GROQ_MODEL, GROQ_API_KEY,
+    GROQ_MODEL, GROQ_API_KEY, require_groq_key,
     CRITICAL_RUL_THRESHOLD, WARNING_RUL_THRESHOLD,
 )
 
@@ -176,6 +176,7 @@ Include: what to inspect, why, when, and expected cost/benefit."""
 
 
 def _plain_llm() -> ChatGroq:
+    require_groq_key()
     return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.2)
 
 

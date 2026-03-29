@@ -7,7 +7,7 @@ import pandas as pd
 from typing import Any
 
 from configs.config import (
-    GROQ_MODEL, GROQ_API_KEY,
+    GROQ_MODEL, GROQ_API_KEY, require_groq_key,
     ANOMALY_ZSCORE_THRESHOLD, FEATURE_COLUMNS
 )
 
@@ -110,7 +110,7 @@ high stress/degradation. Focus on patterns, not individual readings."""
 
 
 def _plain_llm() -> ChatGroq:
-    """Plain LLM — no tool binding. Used for reasoning-only calls."""
+    require_groq_key()
     return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.1)
 
 

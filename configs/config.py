@@ -38,6 +38,14 @@ RUL_CLIP = 125
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+def require_groq_key():
+    """Call this before making any LLM request. Raises clearly if key is missing."""
+    if not GROQ_API_KEY:
+        raise EnvironmentError(
+            "GROQ_API_KEY is not set. Add it to your .env file.\n"
+            "Get a free key at https://console.groq.com"
+        )
+
 # Phoenix/Arize — open-source local tracing (https://phoenix.arize.com)
 PHOENIX_TRACING = os.getenv("PHOENIX_TRACING", "false").lower() == "true"
 PHOENIX_HOST = os.getenv("PHOENIX_HOST", "http://localhost:6006")

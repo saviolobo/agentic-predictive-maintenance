@@ -7,7 +7,7 @@ import pandas as pd
 from typing import Any
 
 from configs.config import (
-    GROQ_MODEL, GROQ_API_KEY,
+    GROQ_MODEL, GROQ_API_KEY, require_groq_key,
     CRITICAL_RUL_THRESHOLD, WARNING_RUL_THRESHOLD,
     MODELS_DIR
 )
@@ -115,6 +115,7 @@ Acknowledge uncertainty — ML predictions carry inherent error (typical MAE ~15
 
 
 def _plain_llm() -> ChatGroq:
+    require_groq_key()
     return ChatGroq(model=GROQ_MODEL, api_key=GROQ_API_KEY, temperature=0.1)
 
 
